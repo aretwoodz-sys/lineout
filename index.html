@@ -746,29 +746,155 @@ function wireRow(row){
   </script>
     </div>
   </div>
+<!-- Realtime Sync for Lineout (paste before </body>) -->
 <script type="module">
+  /***** Firebase CDN imports *****/
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
   import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
-  import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+  import {
+    getFirestore, doc, setDoc, getDoc, onSnapshot
+  } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
-  // ✅ Your config from Firebase
+  /***** YOUR CONFIG (from Firebase console) *****/
   const firebaseConfig = {
     apiKey: "AIzaSyB-GAwSnt5mplQQ-0GV78Ud1v-JfqFuz0o",
     authDomain: "lineout-3a851.firebaseapp.com",
     projectId: "lineout-3a851",
-    storageBucket: "lineout-3a851.firebasestorage.app", 
+    storageBucket: "lineout-3a851.firebasestorage.app",
     messagingSenderId: "133642224320",
     appId: "1:133642224320:web:b47587ea9bbf80ea426325",
     measurementId: "G-14R61YSV5V"
   };
 
-  // Init
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
+  /***** Init + Anonymous Auth *****/
+  const app  = initializeApp(firebaseConfig);
+  const db   = getFirestore(app);
   const auth = getAuth(app);
   await signInAnonymously(auth);
 
-  // ... now paste the sync code I gave earlier here (serializeState, applyState, scheduleSave, onSnapshot, etc.)
+  /***** Room (doc) from URL hash *****/
+  const ROOM = (location.hash.slice(1) || "default").toLowerCase();
+  const docRef = doc(db, "lineouts", ROOM);
+
+  /***** Helpers: read/write page state *****/
+  function serializeState() {
+    // Editable title
+    const title = document.querySelector('h1[contenteditable="true"]')?.innerText?.trim() || "";
+
+    // Optional background class (if you use bg-* classes on <body>)
+    const bgCls = [...document.body.classList].find(c => c.startsWith("bg-")) || null;
+
+    // Table rows: your header order is [#, Location, Tech, Spliced, Balanced, Incomplete, Notes]
+    const rows = [...document.querySelectorAll("#rows tr")].map(tr => {
+      const tds = tr.querySelectorAll("td");
+      return {
+        number: tds[0]?.textContent?.trim() ?? "",     // # (stable id)
+        location: tds[1]?.textContent?.trim() ?? "",   // Location
+        tech: tds[2]?.textContent?.trim() ?? "",       // Tech
+        spliced: tr.querySelector("input.spliced")?.checked ?? false,
+        balanced: tr.querySelector("input.balanced")?.checked ?? false,
+        incomplete: tr.querySelector("input.incomplete")?.checked ?? false,
+        notes: tr.querySelector("textarea.notes-input")?.value ?? ""
+      };
+    });
+
+    return { title, bgCls, rows, ts: Date.now() };
+  }
+
+  function applyState(state) {
+    if (!state) return;
+
+    // Title
+    const titleEl = document.querySelector('h1[contenteditable="true"]');
+    if (titleEl && typeof state.title === "string" && titleEl.innerText !== state.title) {
+      titleEl.innerText = state.title;
+      if (state.title) document.title = state.title;
+    }
+
+    // Background (optional)
+    if (state.bgCls) {
+      document.body.classList.forEach(c => c.startsWith("bg-") && document.body.classList.remove(c));
+      document.body.classList.add(state.bgCls);
+    }
+
+    // Rows: match by first cell (#)
+    const byNum = new Map((state.rows || []).map(r => [String(r.number), r]));
+    document.querySelectorAll("#rows tr").forEach(tr => {
+      const num = tr.querySelector("td")?.textContent?.trim() || "";
+      const data = byNum.get(String(num));
+      if (!data) return;
+
+      const sp = tr.querySelector("input.spliced");     if (sp) sp.checked = !!data.spliced;
+      const ba = tr.querySelector("input.balanced");    if (ba) ba.checked = !!data.balanced;
+      const ic = tr.querySelector("input.incomplete");  if (ic) ic.checked = !!data.incomplete;
+      const nt = tr.querySelector("textarea.notes-input"); if (nt && nt.value !== data.notes) nt.value = data.notes;
+    });
+
+    // If your page tracks counts/highlights, trigger it (you have recalcCounts())
+    if (typeof window.recalcCounts === "function") window.recalcCounts();
+  }
+
+  /***** Debounced save *****/
+  let saveTimer;
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      const state = serializeState();
+      try {
+        await setDoc(docRef, state, { merge: true });
+        // Local backup for offline resilience
+        localStorage.setItem("lineout_backup_" + ROOM, JSON.stringify(state));
+        const s = document.getElementById("status");
+        if (s) { s.textContent = "Saved ✓"; setTimeout(() => (s.textContent = ""), 800); }
+      } catch (e) {
+        console.error("Save failed:", e);
+        const s = document.getElementById("status");
+        if (s) s.textContent = "Offline (local save)";
+      }
+    }, 300);
+  }
+
+  /***** Live updates *****/
+  onSnapshot(docRef, (snap) => {
+    const data = snap.data();
+    if (data) applyState(data);
+  });
+
+  /***** Wire UI events to save *****/
+  document.addEventListener("change", (e) => {
+    // Checkboxes, selects, bg palette buttons (use data-bg on your color swatches if you have them)
+    if (e.target.matches('input[type="checkbox"], select, [data-bg]')) scheduleSave();
+  });
+  document.addEventListener("input", (e) => {
+    if (e.target.matches("textarea.notes-input, h1[contenteditable='true']")) scheduleSave();
+  });
+
+  /***** First load *****/
+  (async () => {
+    try {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) applyState(snap.data());
+      // If doc doesn't exist yet, it'll be created on first edit (scheduleSave)
+    } catch (e) {
+      // Fallback to local cache if Firestore unreachable
+      const cached = localStorage.getItem("lineout_backup_" + ROOM);
+      if (cached) try { applyState(JSON.parse(cached)); } catch {}
+    }
+  })();
+
+  /***** Optional: lightweight Share button helper (works if you add a button with id="shareLink") *****/
+  const shareBtn = document.getElementById("shareLink");
+  if (shareBtn) {
+    shareBtn.addEventListener("click", async () => {
+      if (!location.hash) {
+        const name = prompt("Session name (letters/numbers):", "crew-a");
+        if (name) location.hash = name.toLowerCase();
+      }
+      const url = location.href;
+      try { await navigator.clipboard.writeText(url); alert("Link copied:\n" + url); }
+      catch { prompt("Copy this link:", url); }
+    });
+  }
 </script>
 </body>
 </html>
