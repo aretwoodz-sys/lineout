@@ -564,7 +564,6 @@ function wireRow(row){
       if (!msg) return;
       clearTimeout(setStatus._t); setStatus._t = setTimeout(()=>{ status.textContent=''; }, 4000);
     }
-
 const pdfInput = document.getElementById('pdfFile');
 pdfInput.addEventListener('change', async () => {
   const file = pdfInput.files && pdfInput.files[0];
@@ -573,19 +572,19 @@ pdfInput.addEventListener('change', async () => {
     setStatus(`Parsing “${file.name}”…`);
     const parsed = await parseToInteractiveChecklist(file);
 
-    // 🔒 tell the sync layer a DOM rebuild is starting
+    // Tell sync we’re about to rebuild from an import
     window.syncStartRebuild?.();
 
-    // your existing DOM rebuild
+    // Your existing DOM rebuild
     applyRows(parsed.rows);
 
-    // update title from file name (unchanged)
+    // Update the title from the file name
     const baseName = file.name.replace(/\.pdf$/i, '') || 'Checklist';
     document.getElementById('title').textContent = baseName;
     updateDocTitle();
     setStatus(`Loaded ${parsed.rows.length} row(s) from PDF.`);
 
-    // ☁️ push imported data to Firestore + apply any remote that arrived mid-rebuild
+    // Flush to Firestore & reconcile any remote updates that arrived mid-rebuild
     await window.syncEndRebuild?.();
   } catch (e) {
     console.error(e);
@@ -594,6 +593,7 @@ pdfInput.addEventListener('change', async () => {
     pdfInput.value = '';
   }
 });
+
 
 
     async function parseToInteractiveChecklist(file) {
