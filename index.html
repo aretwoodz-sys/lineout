@@ -592,8 +592,9 @@ pdfInput.addEventListener('change', async () => {
     setStatus('Failed to parse PDF: ' + (e?.message || e), true);
   } finally {
     pdfInput.value = '';
-      }
-    });
+  }
+});
+
 
     async function parseToInteractiveChecklist(file) {
       const buf = await file.arrayBuffer();
