@@ -746,5 +746,29 @@ function wireRow(row){
   </script>
     </div>
   </div>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+  import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+  // ✅ Your config from Firebase
+  const firebaseConfig = {
+    apiKey: "AIzaSyB-GAwSnt5mplQQ-0GV78Ud1v-JfqFuz0o",
+    authDomain: "lineout-3a851.firebaseapp.com",
+    projectId: "lineout-3a851",
+    storageBucket: "lineout-3a851.firebasestorage.app", 
+    messagingSenderId: "133642224320",
+    appId: "1:133642224320:web:b47587ea9bbf80ea426325",
+    measurementId: "G-14R61YSV5V"
+  };
+
+  // Init
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  await signInAnonymously(auth);
+
+  // ... now paste the sync code I gave earlier here (serializeState, applyState, scheduleSave, onSnapshot, etc.)
+</script>
 </body>
 </html>
