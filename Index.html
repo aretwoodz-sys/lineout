@@ -935,6 +935,144 @@ function wireRow(row){
     subscribe(getRoomId());
   });
 </script>
+  
+<script type="module">
+  // --- Firebase v11 CDN ---
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+  import {
+    getFirestore, doc, setDoc, getDoc, collection, onSnapshot, serverTimestamp, query, orderBy
+  } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+  // 1) Your config
+  const firebaseConfig = { /* paste your apiKey, authDomain, projectId, appId */ };
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  // 2) Room helpers
+  function getRoomId() {
+    const p = new URLSearchParams(location.search).get('room');
+    if (p) localStorage.setItem('lineout_room', p);
+    return p || localStorage.getItem('lineout_room') || 'demo';
+  }
+  function setRoomId(room) {
+    const u = new URL(location.href); u.searchParams.set('room', room); history.replaceState({}, '', u);
+    localStorage.setItem('lineout_room', room);
+    subscribe(room);
+  }
+
+  // 3) DOM refs
+  const table = document.querySelector('table');
+  const titleEl = document.querySelector('h1[contenteditable="true"]');
+  const statusEl = document.getElementById('status') || (()=>{ const s=document.createElement('div'); s.id='status'; (document.querySelector('.header')||document.body).appendChild(s); return s; })();
+
+  // 4) Row id enforcement (call this inside your existing addRow(...) too)
+  function ensureRowId(tr, obj = {}) {
+    if (!tr.dataset.row) tr.dataset.row = String(obj['#'] ?? crypto.randomUUID());
+  }
+
+  // 5) Read/apply a single row
+  function readRowState(tr){
+    return {
+      id: tr.dataset.row,
+      idx: [...tr.parentElement.children].indexOf(tr),
+      loc: tr.querySelector('[data-col="Location"]')?.textContent?.trim() ?? '',
+      tech: tr.querySelector('[data-col="Tech"]')?.textContent?.trim() ?? '',
+      spliced: tr.querySelector('input.spliced')?.checked ?? false,
+      balanced: tr.querySelector('input.balanced')?.checked ?? false,
+      incomplete: tr.querySelector('input.incomplete')?.checked ?? false,
+      note: tr.querySelector('.notes-input')?.value ?? ''
+    };
+  }
+  function upsertRow(data){
+    let tr = [...table.tBodies[0].rows].find(r => r.dataset.row === data.id);
+    if (!tr) return; // rely on your existing render to create rows; this just updates fields
+    const setBox = (sel, v)=>{ const el = tr.querySelector(sel); if (el) el.checked = !!v; };
+    const setText = (sel, v)=>{ const el = tr.querySelector(sel); if (el) el.value = v || ''; };
+    setBox('input.spliced', data.spliced);
+    setBox('input.balanced', data.balanced);
+    setBox('input.incomplete', data.incomplete);
+    setText('.notes-input', data.note || '');
+  }
+
+  // 6) Cloud ops
+  async function pushRow(room, data){
+    if (!data?.id) return;
+    await setDoc(doc(db, 'lineouts', room, 'rows', String(data.id)), {
+      ...data, updatedAt: serverTimestamp()
+    }, { merge: true });
+  }
+  async function pushMeta(room){
+    const ids = [...table.tBodies[0].rows].map(r => r.dataset.row).filter(Boolean);
+    const title = titleEl ? titleEl.textContent.trim() : '';
+    await setDoc(doc(db, 'lineouts', room, 'meta', 'sheet'), {
+      title, order: ids, updatedAt: serverTimestamp()
+    }, { merge: true });
+  }
+  async function pushFullState(room){
+    await pushMeta(room);
+    for (const tr of [...table.tBodies[0].rows]) {
+      ensureRowId(tr);
+      await pushRow(room, readRowState(tr));
+    }
+  }
+
+  // 7) Live subscribe
+  let unsubRows = null, unsubMeta = null;
+  function subscribe(room){
+    unsubRows?.(); unsubMeta?.();
+    statusEl.textContent = `connecting to "${room}"…`;
+
+    unsubMeta = onSnapshot(doc(db, 'lineouts', room, 'meta', 'sheet'), (snap)=>{
+      const d = snap.data();
+      if (!d) return;
+      if (titleEl && typeof d.title === 'string' && document.activeElement !== titleEl) {
+        titleEl.textContent = d.title;
+      }
+    });
+
+    const q = query(collection(db, 'lineouts', room, 'rows'), orderBy('idx'));
+    unsubRows = onSnapshot(q, (snap)=>{
+      snap.forEach(docSnap => upsertRow({ id: docSnap.id, ...docSnap.data() }));
+      statusEl.textContent = `connected: ${room} (${snap.size} rows)`;
+    });
+  }
+
+  // 8) Debounced local -> cloud
+  const debounce = (fn, ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+  const saveRowDebounced = debounce((room, tr)=> pushRow(room, readRowState(tr)), 250);
+
+  // 9) Event delegation (checkboxes + notes)
+  table?.addEventListener('change', (e)=>{
+    if (!e.target.matches('input[type="checkbox"]')) return;
+    const tr = e.target.closest('tr'); if (!tr) return;
+    ensureRowId(tr);
+    saveRowDebounced(getRoomId(), tr);
+  });
+  table?.addEventListener('input', (e)=>{
+    if (!e.target.classList.contains('notes-input')) return;
+    const tr = e.target.closest('tr'); if (!tr) return;
+    ensureRowId(tr);
+    saveRowDebounced(getRoomId(), tr);
+  });
+
+  // 10) Seed after you finish parsing a PDF (call once in your existing PDF handler)
+  // Example hook you can call at the end of your current "applyRows" / "parse" flow:
+  window.seedRoomAfterPdf = async ()=> { await pushFullState(getRoomId()); };
+
+  // 11) Optional: when you sort/reset order, call this:
+  window.syncOrderToCloud = ()=> pushMeta(getRoomId());
+
+  // 12) Auth + initial subscribe
+  onAuthStateChanged(auth, async (user)=>{
+    if (!user) await signInAnonymously(auth);
+    subscribe(getRoomId());
+  });
+
+  // If you have a “Room” input/button in your UI, just call setRoomId(newVal).
+</script>
+
 
 </body>
 </html>
